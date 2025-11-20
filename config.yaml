@@ -1,0 +1,81 @@
+service:
+  name: "go-replicator-service"
+  contour: "active"  # или "passive"
+  consumer_group: "replicator-contour-active"
+
+kafka:
+  brokers:
+    - "kafka-1.example.com:9092"
+    - "kafka-2.example.com:9092"
+    - "kafka-3.example.com:9092"
+  sasl:
+    enabled: true
+    mechanism: "SCRAM-SHA-512"
+    username: "${KAFKA_USERNAME}"
+    password: "${KAFKA_PASSWORD}"
+  tls:
+    enabled: true
+    ca_cert: "/etc/ssl/certs/ca.crt"
+  consumer:
+    session_timeout: "30s"
+    heartbeat_interval: "10s"
+    max_processing_time: "5m"
+    initial_offset: "latest"  # "earliest" для начальной синхронизации
+
+database:
+  host: "${DB_HOST}"
+  port: 5432
+  database: "${DB_NAME}"
+  user: "${DB_USER}"
+  password: "${DB_PASSWORD}"
+  sslmode: "require"
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: "1h"
+
+replication:
+  # Маппинг таблиц на топики
+  tables:
+    - name: "users"
+      topic: "users_changes"
+      primary_key: ["id"]
+      conflict_resolution: "version"  # version | timestamp | custom
+      
+    - name: "orders"
+      topic: "orders_changes"
+      primary_key: ["id"]
+      conflict_resolution: "version"
+      
+    - name: "order_items"
+      topic: "order_items_changes"
+      primary_key: ["order_id", "item_id"]
+      conflict_resolution: "timestamp"
+      
+    - name: "products"
+      topic: "products_changes"
+      primary_key: ["id"]
+      conflict_resolution: "version"
+
+  # Настройки обработки
+  batch_size: 100
+  batch_timeout: "5s"
+  worker_pool_size: 10
+  
+  # Retry политика
+  retry:
+    max_attempts: 5
+    initial_interval: "1s"
+    max_interval: "30s"
+    multiplier: 2.0
+    
+  # Dead Letter Queue
+  dlq:
+    enabled: true
+    topic: "replication_dlq"
+
+monitoring:
+  metrics_port: 9090
+  health_port: 8080
+  log_level: "info"  # debug | info | warn | error
+  log_format: "json"  # json | console
+
