@@ -561,7 +561,9 @@ INSERT INTO users ...;
 SET app.is_replication = 'false';
 ```
 
-**Рекомендую Решение 2** - самое простое и надежное.
+**Рекомендую Решение 2** (если есть права на изменение session_replication_role).
+
+**Если нет прав на session_replication_role**, используйте Решение 3 (application_name) - это тоже надежный механизм.
 
 ---
 

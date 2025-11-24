@@ -204,8 +204,9 @@ psql -U postgres -d mydb -c "SELECT setup_table_for_replication('orders');"
 
 **Защита от петли репликации:**
 - ✅ Встроена в `generic_replication_trigger()`
-- ✅ Проверка `session_replication_role = 'replica'`
+- ✅ Проверка `application_name = 'replicator_consumer'`
 - ✅ Автоматически работает при правильном использовании ReplicatorConsumer
+- ✅ Не требует специальных прав (работает с обычной учетной записью)
 
 **Права доступа:**
 - Триггеры: требуют прав на INSERT в `replication_queue`

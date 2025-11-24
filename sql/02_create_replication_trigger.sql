@@ -6,24 +6,14 @@ CREATE OR REPLACE FUNCTION generic_replication_trigger()
 RETURNS TRIGGER AS $$
 BEGIN
     -- ============================================================
-    -- ЗАЩИТА ОТ ПЕТЛИ РЕПЛИКАЦИИ #1
-    -- Проверяем session_replication_role
-    -- Если установлен 'replica', значит это ReplicatorConsumer
-    -- применяет данные, и триггер НЕ должен срабатывать
+    -- ЗАЩИТА ОТ ПЕТЛИ РЕПЛИКАЦИИ
+    -- Проверяем application_name подключения
+    -- Если application_name = 'replicator_consumer', значит это 
+    -- ReplicatorConsumer применяет данные, и триггер НЕ должен срабатывать
     -- ============================================================
-    IF current_setting('session_replication_role') = 'replica' THEN
+    IF current_setting('application_name', true) = 'replicator_consumer' THEN
         RETURN NULL;  -- Не записываем в replication_queue
     END IF;
-
-    -- ============================================================
-    -- ЗАЩИТА ОТ ПЕТЛИ РЕПЛИКАЦИИ #2 (опционально)
-    -- Дополнительная проверка по application_name
-    -- Если ReplicatorConsumer подключается с application_name='replicator_consumer',
-    -- можно добавить еще одну проверку
-    -- ============================================================
-    -- IF current_setting('application_name', true) = 'replicator_consumer' THEN
-    --     RETURN NULL;
-    -- END IF;
 
     -- ============================================================
     -- Обработка INSERT
@@ -74,7 +64,8 @@ $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION generic_replication_trigger IS 
 'Универсальная функция триггера для репликации DML операций.
-Защищена от петли репликации через проверку session_replication_role.
+Защищена от петли репликации через проверку application_name.
+Если application_name = ''replicator_consumer'', триггер не срабатывает.
 Используется для AFTER INSERT OR UPDATE OR DELETE триггеров.';
 
 -- ===================================================================

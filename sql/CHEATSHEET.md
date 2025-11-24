@@ -59,10 +59,13 @@ DELETE FROM users WHERE name = 'Updated';
 
 ```sql
 -- Имитация ReplicatorConsumer
-BEGIN;
-SET LOCAL session_replication_role = 'replica';
+-- Устанавливаем application_name как у ReplicatorConsumer
+SET application_name = 'replicator_consumer';
+
 INSERT INTO users (id, name, email, version) VALUES (999, 'Test Loop', 'loop@test.com', 1);
-COMMIT;
+
+-- Возвращаем обычное application_name
+RESET application_name;
 
 -- Проверка: событие НЕ должно быть в очереди
 SELECT COUNT(*) FROM replication_queue WHERE record_data->>'id' = '999';
@@ -70,6 +73,15 @@ SELECT COUNT(*) FROM replication_queue WHERE record_data->>'id' = '999';
 
 -- Очистка
 DELETE FROM users WHERE id = 999;
+```
+
+**Или подключиться с нужным application_name:**
+```bash
+# В отдельной сессии psql
+PGAPPNAME=replicator_consumer psql -U myuser -d mydb
+
+# Теперь все операции в этой сессии не будут триггерить репликацию
+INSERT INTO users (id, name, email, version) VALUES (999, 'Test', 'test@test.com', 1);
 ```
 
 ## Мониторинг

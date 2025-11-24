@@ -142,16 +142,19 @@ LIMIT 1;
 -- ===================================================================
 
 -- Имитируем поведение ReplicatorConsumer
-BEGIN;
+-- Создаем новое подключение с application_name='replicator_consumer'
+-- В psql это можно эмулировать через переменную окружения:
+-- PGAPPNAME=replicator_consumer psql ...
 
--- Отключаем триггеры (как делает ReplicatorConsumer)
-SET LOCAL session_replication_role = 'replica';
+-- Для теста в текущей сессии временно установим application_name
+SET application_name = 'replicator_consumer';
 
 -- Вставляем данные (триггер НЕ должен сработать)
 INSERT INTO users (id, name, email, version, updated_at) 
 VALUES (2, 'Replicated User', 'replicated@example.com', 1, NOW());
 
-COMMIT;
+-- Возвращаем обычное application_name
+RESET application_name;
 
 -- Проверяем, что событие НЕ попало в replication_queue
 -- (последнее событие должно быть DELETE id=1, а не INSERT id=2)

@@ -161,104 +161,79 @@ PostgreSQL → [Триггер AFTER] → replication_queue
 10. ❌ Триггер срабатывает → петля!
 ```
 
-### Решение: Отключение триггеров при репликации
+### Решение: Проверка application_name в триггере
 
-**Используем `session_replication_role` в PostgreSQL:**
-
-```sql
--- В ReplicatorConsumer перед применением DML:
-
-BEGIN;
-
--- Отключаем ВСЕ триггеры в этой сессии
-SET LOCAL session_replication_role = 'replica';
-
--- Применяем DML (триггеры НЕ срабатывают)
-INSERT INTO users (id, name, version, updated_at, updated_by)
-VALUES (1, 'John', 1, NOW(), 'contour_a')
-ON CONFLICT (id) DO UPDATE
-SET name = EXCLUDED.name,
-    version = EXCLUDED.version,
-    updated_at = EXCLUDED.updated_at,
-    updated_by = EXCLUDED.updated_by
-WHERE users.version < EXCLUDED.version;
-
--- Включаем триггеры обратно (автоматически при COMMIT)
-COMMIT;
-```
-
-**Как работает:**
-- `session_replication_role = 'replica'` - отключает триггеры с дефолтным поведением
-- `session_replication_role = 'origin'` - включает триггеры (по умолчанию)
-- `SET LOCAL` - действует только в рамках текущей транзакции
-
-### Пошаговая схема с защитой
-
-```
-КОНТУР A (Active):
-1. Приложение → INSERT users (session_replication_role = 'origin')
-2. Триггер СРАБАТЫВАЕТ → replication_queue ✅
-3. ReplicatorPublisher → Kafka (source=contour_a)
-
-КОНТУР B (Passive):
-4. ReplicatorConsumer:
-   - BEGIN;
-   - SET LOCAL session_replication_role = 'replica';
-   - INSERT users (триггер НЕ СРАБАТЫВАЕТ) ✅
-   - COMMIT;
-5. replication_queue остается ПУСТЫМ ✅
-6. Нет новых событий в Kafka ✅
-7. Петля ПРЕДОТВРАЩЕНА ✅
-```
-
-### Альтернативное решение: Фильтрация по source
-
-Если по какой-то причине нельзя использовать `session_replication_role`, можно фильтровать в триггере:
+**Используем `application_name` для идентификации ReplicatorConsumer:**
 
 ```sql
-CREATE OR REPLACE FUNCTION users_replication_trigger()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Пропускаем, если это репликация (проверяем application_name)
-    IF current_setting('application_name', true) = 'replicator_consumer' THEN
-        RETURN NULL;
-    END IF;
-    
-    -- Обычная логика триггера
-    INSERT INTO replication_queue (...);
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
+-- В триггере (уже реализовано в generic_replication_trigger):
+IF current_setting('application_name', true) = 'replicator_consumer' THEN
+    RETURN NULL;  -- Не записываем в replication_queue
+END IF;
 ```
 
-И в ReplicatorConsumer:
+**В ReplicatorConsumer при подключении к БД:**
+
 ```go
-db, _ := sql.Open("postgres", dsn + "?application_name=replicator_consumer")
+// Go код
+connString := fmt.Sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s application_name=replicator_consumer",
+    cfg.DB.Host, cfg.DB.Port, cfg.DB.Database, cfg.DB.User, cfg.DB.Password,
+)
+db, err := sql.Open("postgres", connString)
 ```
 
-**Но рекомендуется `session_replication_role`** - это стандартный механизм PostgreSQL.
+**Или через DSN параметры:**
+```
+postgresql://user:password@host:5432/database?application_name=replicator_consumer
+```
 
-### Двойная защита (рекомендуется)
+**Применение изменений:**
 
-Для максимальной надежности используйте оба механизма:
-
-**1. Отключение триггеров:**
 ```go
 func (r *ReplicatorConsumer) applyEvent(event ReplicationEvent) error {
     tx, _ := r.db.Begin()
     defer tx.Rollback()
     
-    // Отключаем триггеры
-    tx.Exec("SET LOCAL session_replication_role = 'replica'")
+    // application_name уже установлен при подключении
+    // Триггер автоматически пропустит эту операцию
     
-    // Применяем DML
     tx.Exec("INSERT INTO users ...")
     
     return tx.Commit()
 }
 ```
 
-**2. Фильтрация своих событий:**
+**Как работает:**
+- ReplicatorConsumer подключается с `application_name=replicator_consumer`
+- Триггер проверяет application_name перед записью в replication_queue
+- Если application_name = 'replicator_consumer', триггер не срабатывает
+- Обычные приложения подключаются без этого параметра → триггер срабатывает ✅
+
+### Пошаговая схема с защитой
+
+```
+КОНТУР A (Active):
+1. Приложение → INSERT users (application_name = 'my_app' или любое)
+2. Триггер проверяет application_name ≠ 'replicator_consumer'
+3. Триггер СРАБАТЫВАЕТ → replication_queue ✅
+4. ReplicatorPublisher → Kafka (source=contour_a)
+
+КОНТУР B (Passive):
+5. ReplicatorConsumer (подключен с application_name='replicator_consumer'):
+   - BEGIN;
+   - INSERT users (триггер проверяет application_name)
+   - Триггер видит 'replicator_consumer' → НЕ СРАБАТЫВАЕТ ✅
+   - COMMIT;
+6. replication_queue остается ПУСТЫМ ✅
+7. Нет новых событий в Kafka ✅
+8. Петля ПРЕДОТВРАЩЕНА ✅
+```
+
+### Дополнительная защита: Фильтрация событий по source.contour
+
+Для дополнительной надежности используйте фильтрацию на уровне ReplicatorConsumer:
+
 ```go
 func (r *ReplicatorConsumer) shouldProcess(event ReplicationEvent) bool {
     // Пропускаем события от СВОЕГО контура
@@ -270,10 +245,14 @@ func (r *ReplicatorConsumer) shouldProcess(event ReplicationEvent) bool {
 }
 ```
 
-**Почему два механизма:**
-- Если случайно забыли `SET session_replication_role`, фильтрация спасет
-- Если в фильтрации баг (неправильный contour), отключение триггеров спасет
-- Defense in depth
+**Двойная защита:**
+1. **Триггер** проверяет `application_name` - основная защита
+2. **ReplicatorConsumer** фильтрует по `source.contour` - дополнительная защита
+
+**Преимущества:**
+- Если триггер случайно срабатывает, фильтрация по contour предотвратит дубликаты
+- Defense in depth - два уровня защиты
+- Защита от ошибок конфигурации
 
 ---
 

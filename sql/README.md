@@ -89,18 +89,30 @@ SELECT setup_replication_for_table('your_table');
 
 ## Защита от петли репликации
 
-Триггер автоматически проверяет `session_replication_role`:
+Триггер автоматически проверяет `application_name`:
 
 ```sql
 -- В триггере:
-IF current_setting('session_replication_role') = 'replica' THEN
+IF current_setting('application_name', true) = 'replicator_consumer' THEN
     RETURN NULL;  -- Не записываем в replication_queue
 END IF;
 ```
 
 **Как работает:**
-- Обычные запросы приложения: `session_replication_role = 'origin'` → триггер срабатывает ✅
-- ReplicatorConsumer: `SET session_replication_role = 'replica'` → триггер НЕ срабатывает ✅
+- Обычные приложения: application_name = любое → триггер срабатывает ✅
+- ReplicatorConsumer: application_name = 'replicator_consumer' → триггер НЕ срабатывает ✅
+
+**Подключение ReplicatorConsumer:**
+```go
+// Go код
+connString := "host=localhost dbname=mydb user=myuser password=mypass application_name=replicator_consumer"
+db, _ := sql.Open("postgres", connString)
+```
+
+Или в psql:
+```bash
+PGAPPNAME=replicator_consumer psql -U myuser -d mydb
+```
 
 ## Быстрый старт
 
@@ -212,17 +224,33 @@ ORDER BY id DESC LIMIT 1;
 
 ```sql
 -- Имитируем ReplicatorConsumer
-BEGIN;
-SET LOCAL session_replication_role = 'replica';
+-- Устанавливаем application_name
+SET application_name = 'replicator_consumer';
 
 INSERT INTO users (id, name, email, version) 
 VALUES (2, 'From Replicator', 'rep@example.com', 1);
 
-COMMIT;
+-- Возвращаем обычное application_name
+RESET application_name;
 
 -- Проверяем replication_queue
 SELECT COUNT(*) FROM replication_queue WHERE record_data->>'id' = '2';
 -- Должно быть 0 (событие НЕ попало в очередь) ✅
+
+-- Очистка
+DELETE FROM users WHERE id = 2;
+```
+
+**Или тест через отдельное подключение:**
+```bash
+# Подключаемся с application_name='replicator_consumer'
+PGAPPNAME=replicator_consumer psql -U myuser -d mydb -c \
+  "INSERT INTO users (id, name, email, version) VALUES (2, 'Test', 'test@example.com', 1);"
+
+# Проверяем
+psql -U myuser -d mydb -c \
+  "SELECT COUNT(*) FROM replication_queue WHERE record_data->>'id' = '2';"
+# Результат: 0
 ```
 
 ## Управление триггерами
@@ -418,11 +446,20 @@ WHERE c.relname = 'your_table';
 
 **Симптомы:** События бесконечно дублируются
 
-**Решение:** Проверьте, что ReplicatorConsumer использует `session_replication_role = 'replica'`
+**Решение:** Проверьте, что ReplicatorConsumer подключается с `application_name='replicator_consumer'`
 
 ```go
 // В Go коде ReplicatorConsumer:
-tx.Exec("SET LOCAL session_replication_role = 'replica'")
+connString := fmt.Sprintf(
+    "host=%s port=%d dbname=%s user=%s password=%s application_name=replicator_consumer",
+    cfg.DB.Host, cfg.DB.Port, cfg.DB.Database, cfg.DB.User, cfg.DB.Password,
+)
+db, err := sql.Open("postgres", connString)
+```
+
+**Проверка текущего application_name:**
+```sql
+SELECT application_name FROM pg_stat_activity WHERE pid = pg_backend_pid();
 ```
 
 ### Проблема: replication_queue растет слишком быстро

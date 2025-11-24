@@ -19,10 +19,10 @@
 
 ✅ **Real-time репликация** (1-3 сек задержка)  
 ✅ **Не требует изменений в приложении** (триггеры PostgreSQL)  
-✅ **Защита от потери данных** (replication_log)  
+✅ **Защита от потери данных** (replication_queue)  
 ✅ **Идемпотентность** (processed_events)  
 ✅ **Разрешение конфликтов** (версионирование)  
-✅ **Защита от петли репликации** (session_replication_role)  
+✅ **Защита от петли репликации** (проверка application_name)  
 
 ## Архитектура
 
@@ -59,19 +59,34 @@ SELECT setup_table_for_replication('products');
 ✅ **Триггер автоматически:**
 - Захватывает все INSERT/UPDATE/DELETE
 - Записывает в `replication_queue`
-- Защищен от петли репликации (через `session_replication_role`)
+- Защищен от петли репликации (через проверку `application_name`)
 
 📚 Подробная документация: [sql/README.md](sql/README.md)
 
 ### 2. Запустить сервисы
 
 ```bash
-# ReplicatorPublisher
-go run cmd/publisher/main.go
+# ReplicatorPublisher ✅
+make build-publisher
+./bin/publisher -config config.publisher.yaml
 
-# ReplicatorConsumer
-go run cmd/consumer/main.go
+# Или через make
+make dev-publisher
+
+# ReplicatorConsumer ✅
+make build-consumer
+./bin/consumer -config config.consumer.yaml
+
+# Или через make
+make dev-consumer
+
+# Собрать оба сервиса
+make build
 ```
+
+📖 **Подробная документация:**
+- [sql/README.md](sql/README.md) - Настройка PostgreSQL
+- [sql/CHEATSHEET.md](sql/CHEATSHEET.md) - Быстрая справка по SQL
 
 ## Структура проекта
 
@@ -88,17 +103,20 @@ go-replicator-service/
 │   └── FILES.md                 # Описание файлов
 │
 ├── cmd/                         # Исполняемые файлы
-│   ├── publisher/               # ReplicatorPublisher (скоро)
-│   └── consumer/                # ReplicatorConsumer (скоро)
+│   ├── publisher/               # ReplicatorPublisher ✅
+│   └── consumer/                # ReplicatorConsumer ✅
 │
-├── internal/                    # Внутренние пакеты (скоро)
-│   ├── config/
-│   ├── kafka/
-│   ├── database/
-│   └── processor/
+├── internal/                    # Внутренние пакеты
+│   ├── config/                  # Конфигурация (YAML + env) ✅
+│   ├── kafka/                   # Kafka producer/consumer ✅
+│   ├── database/                # GORM + PostgreSQL ✅
+│   ├── logger/                  # Zerolog ✅
+│   ├── publisher/               # Publisher бизнес-логика ✅
+│   └── consumer/                # Consumer бизнес-логика ✅
 │
 ├── ARCHITECTURE_OVERVIEW.md     # Архитектура (⭐ начните отсюда)
 ├── HYBRID_SOLUTION.md           # Детальное описание
+├── CHANGES_APPLICATION_NAME.md  # Изменения: защита через application_name
 └── README.md                    # Этот файл
 ```
 
